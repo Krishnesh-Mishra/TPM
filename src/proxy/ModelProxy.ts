@@ -75,7 +75,9 @@ export class ModelProxy {
         if (readMethods.includes(prop) || writeMethods.includes(prop)) {
           return async function(...args: any[]) {
             const connection = await self.poolManager.getConnection(dbName);
-            const DBModel = connection.model(model.modelName);
+            const DBModel = connection.models[model.modelName] 
+              ? connection.model(model.modelName)
+              : connection.model(model.modelName, model.schema);
             const query = (DBModel as any)[prop](...args);
             return self.proxyQuery(query, model.modelName, prop, config);
           };

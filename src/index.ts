@@ -154,10 +154,6 @@ export class TransparentCache {
 
 export function createTransparentCache(config: TransparentCacheConfig): TransparentCache {
   const cache = new TransparentCache(config);
-  cache.initialize().catch((error) => {
-    console.error('Failed to initialize TransparentCache:', error);
-    throw error;
-  });
   return cache;
 }
 
