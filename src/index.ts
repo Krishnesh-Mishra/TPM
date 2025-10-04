@@ -28,6 +28,8 @@ export class TransparentCache {
   private modelProxy: ModelProxy;
   private stats: StatsCollector;
   private perfMonitor: PerformanceMonitor;
+  private initializationPromise: Promise<void> | null = null;
+  private isInitialized: boolean = false;
 
   constructor(private config: TransparentCacheConfig) {
     this.validateConfig(config);
@@ -119,18 +121,46 @@ export class TransparentCache {
     // this.logger.log('Configuration validated successfully');
   }
 
-  async initialize(): Promise<void> {
-    await this.stateManager.initialize();
-    
-    if (this.config.redisURL) {
-      await this.pubSub.connect();
-      this.logger.log('Caching enabled with Redis');
-    } else {
-      this.logger.log('Caching disabled - operating as advanced multi-DB manager');
+  connect(): Promise<void> {
+    if (this.initializationPromise) {
+      return this.initializationPromise;
+    }
+
+    this.initializationPromise = this.initializeConnections();
+    return this.initializationPromise;
+  }
+
+  private async initializeConnections(): Promise<void> {
+    if (this.isInitialized) return;
+
+    try {
+      await this.stateManager.initialize();
+      
+      if (this.config.redisURL) {
+        await this.pubSub.connect();
+        this.logger.log('Caching enabled with Redis');
+      } else {
+        this.logger.log('Caching disabled - operating as advanced multi-DB manager');
+      }
+
+      this.isInitialized = true;
+    } catch (error) {
+      this.initializationPromise = null;
+      throw error;
     }
   }
 
+  async initialize(): Promise<void> {
+    return this.connect();
+  }
+
   wrap<T>(model: Model<T>, config?: ModelConfig): Model<T> {
+    if (!this.isInitialized && !this.initializationPromise) {
+      this.connect().catch((err) => {
+        this.logger.error('Background initialization failed', err);
+      });
+    }
+
     return this.modelProxy.wrap(model, config);
   }
 

@@ -12,7 +12,7 @@ export class ModelProxy {
     private poolManager: PoolManager,
     private _logger: Logger,
     private multiDB: boolean
-  ) { }
+  ) {}
 
   wrap<T>(model: Model<T>, config?: ModelConfig): Model<T> {
     const modelName = model.modelName;
@@ -38,16 +38,24 @@ export class ModelProxy {
         }
 
         const readMethods = ['find', 'findOne', 'findById', 'aggregate'];
-        const writeMethods = [
+        const queryWriteMethods = [
           'findByIdAndUpdate', 'findOneAndUpdate', 'updateOne', 'updateMany',
-          'deleteOne', 'deleteMany', 'create', 'insertMany', 'bulkWrite',
-          'replaceOne', 'save', 'findByIdAndDelete', 'findOneAndDelete'
+          'deleteOne', 'deleteMany', 'replaceOne', 'findByIdAndDelete', 'findOneAndDelete'
         ];
+        const directWriteMethods = ['create', 'insertMany', 'bulkWrite', 'save'];
 
-        if (readMethods.includes(prop) || writeMethods.includes(prop)) {
-          return function (...args: any[]) {
+        if (readMethods.includes(prop) || queryWriteMethods.includes(prop)) {
+          return function(...args: any[]) {
             const query = original.apply(target, args);
             return self.proxyQuery(query, modelName, prop, config);
+          };
+        }
+
+        if (directWriteMethods.includes(prop)) {
+          return async function(...args: any[]) {
+            const result = await original.apply(target, args);
+            await self.interceptor.invalidate(modelName, prop as any);
+            return result;
           };
         }
 
@@ -60,26 +68,38 @@ export class ModelProxy {
 
   private createDBProxy(model: any, dbName: string, config?: ModelConfig): any {
     const self = this;
-
+    
     return new Proxy(model, {
       get(target: any, prop: string) {
         const original = target[prop];
 
         const readMethods = ['find', 'findOne', 'findById', 'aggregate'];
-        const writeMethods = [
+        const queryWriteMethods = [
           'findByIdAndUpdate', 'findOneAndUpdate', 'findByIdAndDelete', 'findOneAndDelete',
-          'updateOne', 'updateMany', 'deleteOne', 'deleteMany',
-          'create', 'insertMany', 'bulkWrite', 'replaceOne', 'save'
+          'updateOne', 'updateMany', 'deleteOne', 'deleteMany', 'replaceOne'
         ];
+        const directWriteMethods = ['create', 'insertMany', 'bulkWrite', 'save'];
 
-        if (readMethods.includes(prop) || writeMethods.includes(prop)) {
-          return async function (...args: any[]) {
+        if (readMethods.includes(prop) || queryWriteMethods.includes(prop)) {
+          return async function(...args: any[]) {
             const connection = await self.poolManager.getConnection(dbName);
-            const DBModel = connection.models[model.modelName]
+            const DBModel = connection.models[model.modelName] 
               ? connection.model(model.modelName)
               : connection.model(model.modelName, model.schema);
             const query = (DBModel as any)[prop](...args);
             return self.proxyQuery(query, model.modelName, prop, config);
+          };
+        }
+
+        if (directWriteMethods.includes(prop)) {
+          return async function(...args: any[]) {
+            const connection = await self.poolManager.getConnection(dbName);
+            const DBModel = connection.models[model.modelName] 
+              ? connection.model(model.modelName)
+              : connection.model(model.modelName, model.schema);
+            const result = await (DBModel as any)[prop](...args);
+            await self.interceptor.invalidate(model.modelName, prop as any);
+            return result;
           };
         }
 
@@ -110,11 +130,15 @@ export class ModelProxy {
 
         if (prop === 'exec') {
           return async () => {
+            const executor = typeof target.exec === 'function' 
+              ? () => target.exec()
+              : () => Promise.resolve(target);
+            
             return self.interceptor.interceptQuery(
               modelName,
               operation as any,
               self.extractQueryParams(target),
-              () => target.exec(),
+              executor,
               { ...queryOptions, cacheTTL: queryOptions.cacheTTL || config?.ttl }
             );
           };
@@ -123,11 +147,15 @@ export class ModelProxy {
         if (prop === 'then') {
           return async (resolve: any, reject: any) => {
             try {
+              const executor = typeof target.exec === 'function' 
+                ? () => target.exec()
+                : () => Promise.resolve(target);
+              
               const result = await self.interceptor.interceptQuery(
                 modelName,
                 operation as any,
                 self.extractQueryParams(target),
-                () => target.exec(),
+                executor,
                 { ...queryOptions, cacheTTL: queryOptions.cacheTTL || config?.ttl }
               );
               resolve(result);
@@ -145,22 +173,11 @@ export class ModelProxy {
     return proxiedQuery;
   }
 
-  private extractQueryParams(query: Query<any, any>): any {
-    if (typeof query.getFilter === "function") {
-      return {
-        filter: query.getFilter(),
-        update: query.getUpdate?.(),
-        options: query.getOptions?.(),
-      };
-    }
-
-    // Fallback for non-query operations (like create, save)
+  private extractQueryParams(query: any): any {
     return {
-      filter: null,
-      update: null,
-      options: null,
-      raw: query, // keep raw object for debugging
+      filter: typeof query.getFilter === 'function' ? query.getFilter() : undefined,
+      update: typeof query.getUpdate === 'function' ? query.getUpdate() : undefined,
+      options: typeof query.getOptions === 'function' ? query.getOptions() : undefined,
     };
-
   }
 }
