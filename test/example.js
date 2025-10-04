@@ -1,4 +1,4 @@
-const { createTransparentCache } = require('./dist/index');
+const { createTransparentCache } = require('../dist/index.js');
 const mongoose = require('mongoose');
 
 async function example() {

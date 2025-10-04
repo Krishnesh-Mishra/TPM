@@ -12,7 +12,7 @@ export class ModelProxy {
     private poolManager: PoolManager,
     private _logger: Logger,
     private multiDB: boolean
-  ) {}
+  ) { }
 
   wrap<T>(model: Model<T>, config?: ModelConfig): Model<T> {
     const modelName = model.modelName;
@@ -45,7 +45,7 @@ export class ModelProxy {
         ];
 
         if (readMethods.includes(prop) || writeMethods.includes(prop)) {
-          return function(...args: any[]) {
+          return function (...args: any[]) {
             const query = original.apply(target, args);
             return self.proxyQuery(query, modelName, prop, config);
           };
@@ -60,7 +60,7 @@ export class ModelProxy {
 
   private createDBProxy(model: any, dbName: string, config?: ModelConfig): any {
     const self = this;
-    
+
     return new Proxy(model, {
       get(target: any, prop: string) {
         const original = target[prop];
@@ -68,14 +68,14 @@ export class ModelProxy {
         const readMethods = ['find', 'findOne', 'findById', 'aggregate'];
         const writeMethods = [
           'findByIdAndUpdate', 'findOneAndUpdate', 'findByIdAndDelete', 'findOneAndDelete',
-          'updateOne', 'updateMany', 'deleteOne', 'deleteMany', 
+          'updateOne', 'updateMany', 'deleteOne', 'deleteMany',
           'create', 'insertMany', 'bulkWrite', 'replaceOne', 'save'
         ];
 
         if (readMethods.includes(prop) || writeMethods.includes(prop)) {
-          return async function(...args: any[]) {
+          return async function (...args: any[]) {
             const connection = await self.poolManager.getConnection(dbName);
-            const DBModel = connection.models[model.modelName] 
+            const DBModel = connection.models[model.modelName]
               ? connection.model(model.modelName)
               : connection.model(model.modelName, model.schema);
             const query = (DBModel as any)[prop](...args);
@@ -146,10 +146,21 @@ export class ModelProxy {
   }
 
   private extractQueryParams(query: Query<any, any>): any {
+    if (typeof query.getFilter === "function") {
+      return {
+        filter: query.getFilter(),
+        update: query.getUpdate?.(),
+        options: query.getOptions?.(),
+      };
+    }
+
+    // Fallback for non-query operations (like create, save)
     return {
-      filter: query.getFilter(),
-      update: query.getUpdate(),
-      options: query.getOptions(),
+      filter: null,
+      update: null,
+      options: null,
+      raw: query, // keep raw object for debugging
     };
+
   }
 }
